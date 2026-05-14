@@ -13,82 +13,57 @@ setting_up_container
 network_check
 update_os
 
-APP="Supabase"
-INSTALL_PATH="/opt/supabase"
-
-function set_env_var() {
-  local key="$1"
-  local value="$2"
-
-  sed -i "s|^${key}=.*|${key}=${value}|" "$INSTALL_PATH/.env"
-}
-
-function read_env_var() {
-  local key="$1"
-
-  sed -n "s|^${key}=||p" "$INSTALL_PATH/.env" | head -n1
-}
-
-function enable_new_auth_keys() {
-  sed -i \
-    -e '/^[[:space:]]*#GOTRUE_JWT_KEYS:/ s/#//' \
-    -e '/^[[:space:]]*#API_JWT_JWKS:/ s/#//' \
-    -e '/^[[:space:]]*#JWT_JWKS:/ s/#//' \
-    "$INSTALL_PATH/docker-compose.yml"
-}
-
 msg_info "Installing Dependencies"
-$STD apt install -y \
-  git \
-  openssl \
-  rsync
+$STD apt install -y openssl
 msg_ok "Installed Dependencies"
 
 NODE_VERSION="22" setup_nodejs
 DOCKER_SKIP_UPDATES="true" USE_DOCKER_REPO="true" setup_docker
 
-msg_info "Fetching ${APP} Docker Files"
-TMP_DIR="$(mktemp -d)"
-git clone --filter=blob:none --no-checkout https://github.com/supabase/supabase "$TMP_DIR/supabase" >/dev/null 2>&1
-cd "$TMP_DIR/supabase"
-git sparse-checkout set --cone docker >/dev/null 2>&1
-git checkout master >/dev/null 2>&1
-mkdir -p "$INSTALL_PATH"
-cp -a "$TMP_DIR/supabase/docker/." "$INSTALL_PATH/"
-rm -rf "$TMP_DIR"
-msg_ok "Fetched ${APP} Docker Files"
+fetch_and_deploy_gh_release "supabase" "supabase/supabase" "tarball" "latest" "/opt/supabase-src"
 
-msg_info "Configuring ${APP}"
-cp "$INSTALL_PATH/.env.example" "$INSTALL_PATH/.env"
-cd "$INSTALL_PATH"
+msg_info "Installing Docker Files"
+mkdir -p /opt/supabase
+cp -a /opt/supabase-src/docker/. /opt/supabase/
+msg_ok "Installed Docker Files"
+
+msg_info "Configuring Supabase"
+cp /opt/supabase/.env.example /opt/supabase/.env
+cd /opt/supabase
 $STD sh utils/generate-keys.sh --update-env
 $STD sh utils/add-new-auth-keys.sh --update-env
-set_env_var "DASHBOARD_PASSWORD" "supa$(openssl rand -hex 14)"
-set_env_var "SUPABASE_PUBLIC_URL" "http://${LOCAL_IP}:8000"
-set_env_var "API_EXTERNAL_URL" "http://${LOCAL_IP}:8000"
-set_env_var "SITE_URL" "http://${LOCAL_IP}:3000"
-set_env_var "POOLER_TENANT_ID" "supabase$(openssl rand -hex 4)"
-set_env_var "OPENAI_API_KEY" ""
-enable_new_auth_keys
-chmod 600 "$INSTALL_PATH/.env"
-msg_ok "Configured ${APP}"
+sed -i \
+  -e "s|^DASHBOARD_PASSWORD=.*|DASHBOARD_PASSWORD=supa$(openssl rand -hex 14)|" \
+  -e "s|^SUPABASE_PUBLIC_URL=.*|SUPABASE_PUBLIC_URL=http://${LOCAL_IP}:8000|" \
+  -e "s|^API_EXTERNAL_URL=.*|API_EXTERNAL_URL=http://${LOCAL_IP}:8000|" \
+  -e "s|^SITE_URL=.*|SITE_URL=http://${LOCAL_IP}:3000|" \
+  -e "s|^POOLER_TENANT_ID=.*|POOLER_TENANT_ID=supabase$(openssl rand -hex 4)|" \
+  -e "s|^OPENAI_API_KEY=.*|OPENAI_API_KEY=|" \
+  /opt/supabase/.env
+sed -i \
+  -e '/^[[:space:]]*#GOTRUE_JWT_KEYS:/ s/#//' \
+  -e '/^[[:space:]]*#API_JWT_JWKS:/ s/#//' \
+  -e '/^[[:space:]]*#JWT_JWKS:/ s/#//' \
+  /opt/supabase/docker-compose.yml
+chmod 600 /opt/supabase/.env
+msg_ok "Configured Supabase"
 
-msg_info "Pulling ${APP} Images"
-cd "$INSTALL_PATH"
+msg_info "Pulling Supabase Images"
+cd /opt/supabase
 $STD docker compose pull
-msg_ok "Pulled ${APP} Images"
+msg_ok "Pulled Supabase Images"
 
-msg_info "Starting ${APP}"
+msg_info "Starting Supabase"
 $STD docker compose up -d
-msg_ok "Started ${APP}"
+msg_ok "Started Supabase"
 
 echo ""
-msg_ok "${APP} is reachable at: ${BL}http://${LOCAL_IP}:8000${CL}"
+msg_ok "Supabase is reachable at: ${BL}http://${LOCAL_IP}:8000${CL}"
 echo -e "${INFO}${YW} Dashboard credentials:${CL}"
-echo -e "${TAB}${GATEWAY}${BGN}Username: $(read_env_var "DASHBOARD_USERNAME")${CL}"
-echo -e "${TAB}${GATEWAY}${BGN}Password: $(read_env_var "DASHBOARD_PASSWORD")${CL}"
+echo -e "${TAB}${GATEWAY}${BGN}Username: $(sed -n 's|^DASHBOARD_USERNAME=||p' /opt/supabase/.env | head -n1)${CL}"
+echo -e "${TAB}${GATEWAY}${BGN}Password: $(sed -n 's|^DASHBOARD_PASSWORD=||p' /opt/supabase/.env | head -n1)${CL}"
 echo -e "${INFO}${YW} Supabase keys and database credentials are stored in:${CL}"
-echo -e "${TAB}${GATEWAY}${BGN}${INSTALL_PATH}/.env${CL}"
+echo -e "${TAB}${GATEWAY}${BGN}/opt/supabase/.env${CL}"
 
 motd_ssh
 customize
